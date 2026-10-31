@@ -1,332 +1,394 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { db } from './db'
+import type { Category } from './db'
 import './App.css'
 
-type Category = 'feat' | 'work' | 'rest' | 'game' | 'chore' | 'scroll' | 'custom'
-
 type Commit = {
-  id: string
-  category: Category
-  message: string
-  duration: number
-  tags: string[]
-  createdAt: Date
+	id: string
+	category: Category
+	message: string
+	duration: number
+	tags: string[]
+	createdAt: Date
 }
 
 const categories: { id: Category; label: string }[] = [
-  { id: 'feat', label: 'Развитие' },
-  { id: 'work', label: 'Работа' },
-  { id: 'rest', label: 'Отдых' },
-  { id: 'game', label: 'Игры' },
-  { id: 'chore', label: 'Быт' },
-  { id: 'scroll', label: 'Соцсети' },
-  { id: 'custom', label: 'Другое' },
+	{ id: 'feat', label: 'Развитие' },
+	{ id: 'work', label: 'Работа' },
+	{ id: 'rest', label: 'Отдых' },
+	{ id: 'game', label: 'Игры' },
+	{ id: 'chore', label: 'Быт' },
+	{ id: 'scroll', label: 'Соцсети' },
+	{ id: 'custom', label: 'Другое' },
 ]
 
 function parseCommit(input: string): Omit<Commit, 'id' | 'createdAt'> | null {
-  const colonIndex = input.indexOf(':')
+	const colonIndex = input.indexOf(':')
 
-  if (colonIndex === -1) {
-    return null
-  }
+	if (colonIndex === -1) {
+		return null
+	}
 
-  const rawCategory = input.slice(0, colonIndex).trim().toLowerCase()
-  const category = categories.find((item) => item.id === rawCategory)?.id
+	const rawCategory = input.slice(0, colonIndex).trim().toLowerCase()
+	const category = categories.find((item) => item.id === rawCategory)?.id
 
-  if (!category) {
-    return null
-  }
+	if (!category) {
+		return null
+	}
 
-  let message = input.slice(colonIndex + 1).trim()
+	let message = input.slice(colonIndex + 1).trim()
 
-  const tags = Array.from(
-    message.matchAll(/#([\p{L}\p{N}_-]+)/gu),
-    (match) => match[1],
-  )
+	const tags = Array.from(
+		message.matchAll(/#([\p{L}\p{N}_-]+)/gu),
+		(match) => match[1],
+	)
 
-  message = message.replace(/#[\p{L}\p{N}_-]+/gu, ' ').trim()
+	message = message.replace(/#[\p{L}\p{N}_-]+/gu, ' ').trim()
 
-  const durationMatch = message.match(
-    /(?:^|\s)(?:(\d+)\s*(?:h|ч))?\s*(\d+)\s*(?:m|м)(?=\s|$)/i,
-  )
+	const durationMatch = message.match(
+		/(?:^|\s)(?:(\d+)\s*(?:h|ч))?\s*(\d+)\s*(?:m|м)(?=\s|$)/i,
+	)
 
-  if (!durationMatch || !message) {
-    return null
-  }
+	if (!durationMatch || !message) {
+		return null
+	}
 
-  const hours = Number(durationMatch[1] ?? 0)
-  const minutes = Number(durationMatch[2])
-  const duration = hours * 60 + minutes
+	const hours = Number(durationMatch[1] ?? 0)
+	const minutes = Number(durationMatch[2])
+	const duration = hours * 60 + minutes
 
-  if (duration <= 0 || duration > 1440) {
-    return null
-  }
+	if (duration <= 0 || duration > 1440) {
+		return null
+	}
 
-  message = message.replace(durationMatch[0], ' ').trim()
+	message = message.replace(durationMatch[0], ' ').trim()
 
-  if (!message) {
-    return null
-  }
+	if (!message) {
+		return null
+	}
 
-  return {
-    category,
-    message,
-    duration,
-    tags,
-  }
+	return {
+		category,
+		message,
+		duration,
+		tags,
+	}
 }
 
 function formatDuration(minutes: number): string {
-  const hours = Math.floor(minutes / 60)
-  const remainingMinutes = minutes % 60
+	const hours = Math.floor(minutes / 60)
+	const remainingMinutes = minutes % 60
 
-  if (hours === 0) {
-    return `${remainingMinutes} мин`
-  }
+	if (hours === 0) {
+		return `${remainingMinutes} мин`
+	}
 
-  if (remainingMinutes === 0) {
-    return `${hours} ч`
-  }
+	if (remainingMinutes === 0) {
+		return `${hours} ч`
+	}
 
-  return `${hours} ч ${remainingMinutes} мин`
+	return `${hours} ч ${remainingMinutes} мин`
 }
 
 function formatTime(date: Date): string {
-  return date.toLocaleTimeString('ru-RU', {
-    hour: '2-digit',
-    minute: '2-digit',
-  })
+	return date.toLocaleTimeString('ru-RU', {
+		hour: '2-digit',
+		minute: '2-digit',
+	})
 }
 
 function App() {
-  const [input, setInput] = useState('')
-  const [commits, setCommits] = useState<Commit[]>([])
-  const [error, setError] = useState('')
+	const [input, setInput] = useState('')
+	const [commits, setCommits] = useState<Commit[]>([])
+	const [error, setError] = useState('')
 
-  const totalMinutes = commits.reduce(
-    (total, commit) => total + commit.duration,
-    0,
-  )
+	const [isLoading, setIsLoading] = useState(true)
 
-  function addCommit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault()
+	useEffect(() => {
+		async function loadCommits() {
+			try {
+				const savedEvents = await db.events
+					.orderBy('createdAt')
+					.reverse()
+					.toArray()
 
-    const parsed = parseCommit(input)
+				const loadedCommits: Commit[] = savedEvents.map((item) => ({
+					id: item.id,
+					category: item.category,
+					message: item.message,
+					duration: item.durationMinutes,
+					tags: item.tags,
+					createdAt: new Date(item.createdAt),
+				}))
 
-    if (!parsed) {
-      setError(
-        'Проверь формат: категория: описание длительность #тег',
-      )
-      return
-    }
+				setCommits(loadedCommits)
+			} catch (error) {
+				console.error('Не удалось загрузить события:', error)
+				setError('Не удалось загрузить сохранённые события.')
+			} finally {
+				setIsLoading(false)
+			}
+		}
 
-    const newCommit: Commit = {
-      ...parsed,
-      id: crypto.randomUUID(),
-      createdAt: new Date(),
-    }
+		void loadCommits()
+	}, [])
 
-    setCommits((previous) => [newCommit, ...previous])
-    setInput('')
-    setError('')
-  }
+	const totalMinutes = commits.reduce(
+		(total, commit) => total + commit.duration,
+		0,
+	)
 
-  function deleteCommit(id: string) {
-    setCommits((previous) => previous.filter((commit) => commit.id !== id))
-  }
+	async function addCommit(event: React.FormEvent<HTMLFormElement>) {
+		event.preventDefault()
 
-  const today = new Date().toLocaleDateString('ru-RU', {
-    day: 'numeric',
-    month: 'long',
-    weekday: 'long',
-  })
+		const parsed = parseCommit(input)
 
-  return (
-    <main className="app">
-      <header className="topbar">
-        <a className="brand" href="#home" aria-label="GitLife — главная">
-          <span className="brand-icon">G</span>
-          <span>GitLife</span>
-        </a>
+		if (!parsed) {
+			setError(
+				'Проверь формат: категория: описание длительность #тег',
+			)
+			return
+		}
 
-        <span className="topbar-caption">Твоя жизнь в коммитах</span>
-      </header>
+				const newCommit: Commit = {
+			...parsed,
+			id: crypto.randomUUID(),
+			createdAt: new Date(),
+		}
 
-      <div className="content" id="home">
-        <section className="welcome">
-          <div>
-            <p className="eyebrow">ТВОЯ ИСТОРИЯ</p>
-            <h1>Привет!</h1>
-            <p className="subtitle">
-              Фиксируй моменты. Замечай, как проходит время.
-            </p>
-          </div>
+		try {
+			const savedEvent = {
+				id: newCommit.id,
+				category: newCommit.category,
+				message: newCommit.message,
+				durationMinutes: newCommit.duration,
+				tags: newCommit.tags,
+				eventAt: newCommit.createdAt.toISOString(),
+				createdAt: newCommit.createdAt.toISOString(),
+			}
 
-          <div className="date-card">
-            <span className="date-icon">◷</span>
-            <span>{today}</span>
-          </div>
-        </section>
+			await db.events.add(savedEvent)
 
-        <section className="summary">
-          <div className="summary-card">
-            <span className="summary-label">Коммиты сегодня</span>
-            <strong>{commits.length}</strong>
-            <span className="summary-note">Записанных событий</span>
-          </div>
+			setCommits((previous) => [newCommit, ...previous])
+			setInput('')
+			setError('')
+		} catch (error) {
+			console.error('Не удалось сохранить событие:', error)
+			setError('Не удалось сохранить запись. Попробуй ещё раз.')
+		}
+	}
 
-          <div className="summary-card">
-            <span className="summary-label">Учтённое время</span>
-            <strong>{formatDuration(totalMinutes)}</strong>
-            <span className="summary-note">Сумма длительности событий</span>
-          </div>
-        </section>
+	async function deleteCommit(id: string) {
+		try {
+			await db.events.delete(id)
 
-        <section className="panel">
-          <div className="panel-heading">
-            <div>
-              <p className="eyebrow">НОВАЯ ЗАПИСЬ</p>
-              <h2>Что ты делал?</h2>
-            </div>
-            <span className="heading-icon">＋</span>
-          </div>
+			setCommits((previous) =>
+				previous.filter((commit) => commit.id !== id),
+			)
+		} catch (error) {
+			console.error('Не удалось удалить событие:', error)
+			setError('Не удалось удалить запись.')
+		}
+	}
 
-          <form onSubmit={addCommit}>
-            <label className="input-label" htmlFor="commit-input">
-              Команда коммита
-            </label>
+	const today = new Date().toLocaleDateString('ru-RU', {
+		day: 'numeric',
+		month: 'long',
+		weekday: 'long',
+	})
 
-            <div className="input-wrapper">
-              <span className="terminal-prefix">&gt;_</span>
-              <input
-                id="commit-input"
-                type="text"
-                value={input}
-                onChange={(event) => {
-                  setInput(event.target.value)
-                  setError('')
-                }}
-                placeholder="feat: изучил TypeScript 1h30m #study"
-                autoComplete="off"
-              />
-            </div>
+	return (
+		<main className="app">
+			<header className="topbar">
+				<a className="brand" href="#home" aria-label="GitLife — главная">
+					<span className="brand-icon">G</span>
+					<span>GitLife</span>
+				</a>
 
-            <p className="input-hint">
-              Категория: описание, длительность и необязательные теги.
-            </p>
+				<span className="topbar-caption">Твоя жизнь в коммитах</span>
+			</header>
 
-            <div className="category-list">
-              {categories.map((category) => (
-                <button
-                  className="category-chip"
-                  key={category.id}
-                  type="button"
-                  onClick={() => {
-                    setInput((previous) =>
-                      previous
-                        ? `${category.id}: ${previous}`
-                        : `${category.id}: `,
-                    )
-                    setError('')
-                    document.getElementById('commit-input')?.focus()
-                  }}
-                >
-                  {category.label}
-                </button>
-              ))}
-            </div>
+			<div className="content" id="home">
+				<section className="welcome">
+					<div>
+						<p className="eyebrow">ТВОЯ ИСТОРИЯ</p>
+						<h1>Привет!</h1>
+						<p className="subtitle">
+							Фиксируй моменты. Замечай, как проходит время.
+						</p>
+					</div>
 
-            {error && <p className="error-message">{error}</p>}
+					<div className="date-card">
+						<span className="date-icon">◷</span>
+						<span>{today}</span>
+					</div>
+				</section>
 
-            <button className="submit-button" type="submit">
-              <span>＋</span> Создать коммит
-            </button>
-          </form>
+				<section className="summary">
+					<div className="summary-card">
+						<span className="summary-label">Коммиты сегодня</span>
+						<strong>{commits.length}</strong>
+						<span className="summary-note">Записанных событий</span>
+					</div>
 
-          <div className="examples">
-            <span>Пример:</span>
-            <code>scroll: TikTok 35m #evening</code>
-          </div>
-        </section>
+					<div className="summary-card">
+						<span className="summary-label">Учтённое время</span>
+						<strong>{formatDuration(totalMinutes)}</strong>
+						<span className="summary-note">Сумма длительности событий</span>
+					</div>
+				</section>
 
-        <section className="history">
-          <div className="history-heading">
-            <div>
-              <p className="eyebrow">ТВОЙ ДЕНЬ</p>
-              <h2>Последние коммиты</h2>
-            </div>
+				<section className="panel">
+					<div className="panel-heading">
+						<div>
+							<p className="eyebrow">НОВАЯ ЗАПИСЬ</p>
+							<h2>Что ты делал?</h2>
+						</div>
+						<span className="heading-icon">＋</span>
+					</div>
 
-            <span className="history-count">{commits.length}</span>
-          </div>
+					<form onSubmit={addCommit}>
+						<label className="input-label" htmlFor="commit-input">
+							Команда коммита
+						</label>
 
-          {commits.length === 0 ? (
-            <div className="empty-state">
-              <div className="empty-icon">&lt;/&gt;</div>
-              <h3>История пока пуста</h3>
-              <p>
-                Добавь первый коммит, чтобы начать собирать историю своего дня.
-              </p>
-            </div>
-          ) : (
-            <div className="commit-list">
-              {commits.map((commit) => {
-                const categoryLabel =
-                  categories.find((item) => item.id === commit.category)?.label ??
-                  'Другое'
+						<div className="input-wrapper">
+							<span className="terminal-prefix">&gt;_</span>
+							<input
+								id="commit-input"
+								type="text"
+								value={input}
+								onChange={(event) => {
+									setInput(event.target.value)
+									setError('')
+								}}
+								placeholder="feat: изучил TypeScript 1h30m #study"
+								autoComplete="off"
+							/>
+						</div>
 
-                return (
-                  <article className="commit-card" key={commit.id}>
-                    <div className={`commit-marker marker-${commit.category}`}>
-                      <span>✓</span>
-                    </div>
+						<p className="input-hint">
+							Категория: описание, длительность и необязательные теги.
+						</p>
 
-                    <div className="commit-body">
-                      <div className="commit-topline">
-                        <span className={`category-label label-${commit.category}`}>
-                          {categoryLabel}
-                        </span>
-                        <time>{formatTime(commit.createdAt)}</time>
-                      </div>
+						<div className="category-list">
+							{categories.map((category) => (
+								<button
+									className="category-chip"
+									key={category.id}
+									type="button"
+									onClick={() => {
+										setInput((previous) =>
+											previous
+												? `${category.id}: ${previous}`
+												: `${category.id}: `,
+										)
+										setError('')
+										document.getElementById('commit-input')?.focus()
+									}}
+								>
+									{category.label}
+								</button>
+							))}
+						</div>
 
-                      <h3>{commit.message}</h3>
+						{error && <p className="error-message">{error}</p>}
 
-                      {commit.tags.length > 0 && (
-                        <div className="tag-list">
-                          {commit.tags.map((tag) => (
-                            <span className="tag" key={tag}>
-                              #{tag}
-                            </span>
-                          ))}
-                        </div>
-                      )}
+						<button
+							className="submit-button"
+							type="submit"
+							disabled={isLoading}
+							>
+							<span>＋</span>{' '}
+							{isLoading ? 'Загрузка...' : 'Создать коммит'}
+						</button>
+					</form>
 
-                      <div className="commit-duration">
-                        <span>◷</span> {formatDuration(commit.duration)}
-                      </div>
-                    </div>
+					<div className="examples">
+						<span>Пример:</span>
+						<code>scroll: TikTok 35m #evening</code>
+					</div>
+				</section>
 
-                    <button
-                      className="delete-button"
-                      type="button"
-                      onClick={() => deleteCommit(commit.id)}
-                      aria-label={`Удалить запись: ${commit.message}`}
-                      title="Удалить коммит"
-                    >
-                      ×
-                    </button>
-                  </article>
-                )
-              })}
-            </div>
-          )}
-        </section>
+				<section className="history">
+					<div className="history-heading">
+						<div>
+							<p className="eyebrow">ТВОЙ ДЕНЬ</p>
+							<h2>Последние коммиты</h2>
+						</div>
 
-        <footer className="footer">
-          <span className="footer-dot" />
-          GitLife <span>·</span> Маленькие шаги тоже имеют значение.
-        </footer>
-      </div>
-    </main>
-  )
+						<span className="history-count">{commits.length}</span>
+					</div>
+
+					{commits.length === 0 ? (
+						<div className="empty-state">
+							<div className="empty-icon">&lt;/&gt;</div>
+							<h3>История пока пуста</h3>
+							<p>
+								Добавь первый коммит, чтобы начать собирать историю своего дня.
+							</p>
+						</div>
+					) : (
+						<div className="commit-list">
+							{commits.map((commit) => {
+								const categoryLabel =
+									categories.find((item) => item.id === commit.category)?.label ??
+									'Другое'
+
+								return (
+									<article className="commit-card" key={commit.id}>
+										<div className={`commit-marker marker-${commit.category}`}>
+											<span>✓</span>
+										</div>
+
+										<div className="commit-body">
+											<div className="commit-topline">
+												<span className={`category-label label-${commit.category}`}>
+													{categoryLabel}
+												</span>
+												<time>{formatTime(commit.createdAt)}</time>
+											</div>
+
+											<h3>{commit.message}</h3>
+
+											{commit.tags.length > 0 && (
+												<div className="tag-list">
+													{commit.tags.map((tag) => (
+														<span className="tag" key={tag}>
+															#{tag}
+														</span>
+													))}
+												</div>
+											)}
+
+											<div className="commit-duration">
+												<span>◷</span> {formatDuration(commit.duration)}
+											</div>
+										</div>
+
+										<button
+											className="delete-button"
+											type="button"
+											onClick={() => deleteCommit(commit.id)}
+											aria-label={`Удалить запись: ${commit.message}`}
+											title="Удалить коммит"
+										>
+											×
+										</button>
+									</article>
+								)
+							})}
+						</div>
+					)}
+				</section>
+
+				<footer className="footer">
+					<span className="footer-dot" />
+					GitLife <span>·</span> Маленькие шаги тоже имеют значение.
+				</footer>
+			</div>
+		</main>
+	)
 }
 
 export default App
